@@ -15,6 +15,7 @@ import PharmaCalculator from '@/components/tools/PharmaCalculator';
 import MedicationSearch from '@/components/tools/MedicationSearch';
 import PrescriptionReader from '@/components/tools/PrescriptionReader';
 import MedicationComparator from '@/components/tools/MedicationComparator';
+import { Medication } from '@/types/pharma';
 
 type ActiveModule = 'calculator' | 'search' | 'prescription' | 'comparator';
 
@@ -23,9 +24,17 @@ export default function HomePage() {
   const [comparatorInitialMedId, setComparatorInitialMedId] = useState<string | null>(
     null
   );
+  const [comparatorCustomMeds, setComparatorCustomMeds] = useState<Medication[]>(
+    []
+  );
 
-  const handleSendToComparator = (medId: string) => {
+  const handleSendToComparator = (medId: string, fullMed?: Medication) => {
     setComparatorInitialMedId(medId);
+    if (fullMed) {
+      setComparatorCustomMeds((prev) =>
+        prev.some((m) => m.id === fullMed.id) ? prev : [fullMed, ...prev]
+      );
+    }
     setActiveModule('comparator');
   };
 
@@ -159,7 +168,10 @@ export default function HomePage() {
           )}
           {activeModule === 'prescription' && <PrescriptionReader />}
           {activeModule === 'comparator' && (
-            <MedicationComparator initialMedId={comparatorInitialMedId} />
+            <MedicationComparator
+              initialMedId={comparatorInitialMedId}
+              customMeds={comparatorCustomMeds}
+            />
           )}
         </section>
       </main>

@@ -12,16 +12,32 @@ import {
   Layers,
 } from 'lucide-react';
 import { MEDICATIONS_DB } from '@/data/medications-db';
+import { Medication } from '@/types/pharma';
+import { findPairwiseInteractions } from '@/utils/interactions';
 
 interface MedicationComparatorProps {
   initialMedId?: string | null;
+  customMeds?: Medication[];
 }
 
-export default function MedicationComparator({ initialMedId }: MedicationComparatorProps) {
+export default function MedicationComparator({
+  initialMedId,
+  customMeds = [],
+}: MedicationComparatorProps) {
+  const availableMeds = useMemo(() => {
+    const extra = customMeds.filter(
+      (cm) => !MEDICATIONS_DB.some((m) => m.id === cm.id)
+    );
+    return [...extra, ...MEDICATIONS_DB];
+  }, [customMeds]);
+
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
-    if (initialMedId && MEDICATIONS_DB.some((m) => m.id === initialMedId)) {
-      const other = MEDICATIONS_DB.find((m) => m.id !== initialMedId)?.id || 'paracetamol';
-      return [initialMedId, other];
+    if (initialMedId) {
+      const secondCandidate =
+        customMeds.find((m) => m.id !== initialMedId)?.id ||
+        MEDICATIONS_DB.find((m) => m.id !== initialMedId)?.id ||
+        'paracetamol';
+      return [initialMedId, secondCandidate];
     }
     return ['dipirona-monoidratada', 'paracetamol', 'ibuprofeno'];
   });
@@ -29,9 +45,9 @@ export default function MedicationComparator({ initialMedId }: MedicationCompara
   const selectedMeds = useMemo(
     () =>
       selectedIds
-        .map((id) => MEDICATIONS_DB.find((m) => m.id === id))
+        .map((id) => availableMeds.find((m) => m.id === id))
         .filter((m): m is NonNullable<typeof m> => Boolean(m)),
-    [selectedIds]
+    [selectedIds, availableMeds]
   );
 
   const handleSelectChange = (index: number, newId: string) => {
@@ -65,27 +81,11 @@ export default function MedicationComparator({ initialMedId }: MedicationCompara
       (m) => m.therapeuticClass === selectedMeds[0].therapeuticClass
     );
 
-    // Verifica se há interação direta documentada entre eles
-    const interactionWarnings: string[] = [];
-    for (let i = 0; i < selectedMeds.length; i++) {
-      for (let j = i + 1; j < selectedMeds.length; j++) {
-        const a = selectedMeds[i];
-        const b = selectedMeds[j];
-        a.interactions.forEach((inter) => {
-          const t = inter.interactingSubstance.toLowerCase();
-          if (
-            t.includes(b.activeIngredient.toLowerCase().split(' ')[0]) ||
-            (t.includes('ieca') && b.pharmacologicalGroup.toLowerCase().includes('ieca')) ||
-            (t.includes('bra') && b.pharmacologicalGroup.toLowerCase().includes('bra')) ||
-            (t.includes('aine') && b.therapeuticClass.toLowerCase().includes('aine'))
-          ) {
-            interactionWarnings.push(
-              `${a.name.split('(')[0].trim()} + ${b.name.split('(')[0].trim()}: ${inter.effect} (${inter.conduct})`
-            );
-          }
-        });
-      }
-    }
+    // Verifica se há interação direta documentada entre eles (simétrico A <-> B)
+    const detected = findPairwiseInteractions(selectedMeds);
+    const interactionWarnings = detected.map(
+      (d) => `${d.pair}: ${d.effect} (${d.conduct})`
+    );
 
     return {
       sameActive,
@@ -132,6 +132,10 @@ export default function MedicationComparator({ initialMedId }: MedicationCompara
             {
               label: 'Analgésicos/AINEs (Dipirona × Paracetamol × Ibuprofeno)',
               ids: ['dipirona-monoidratada', 'paracetamol', 'ibuprofeno'],
+            },
+            {
+              label: 'Antiepilépticos (Depakene/Valproato × Tegretol/Carbamazepina × Rivotril)',
+              ids: ['acido-valproico-depakene', 'carbamazepina', 'clonazepam'],
             },
             {
               label: 'Anti-hipertensivos (Losartana × Enalapril × Hidroclorotiazida)',
@@ -206,7 +210,7 @@ export default function MedicationComparator({ initialMedId }: MedicationCompara
                 onChange={(e) => handleSelectChange(idx, e.target.value)}
                 className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-800 focus:outline-none focus:border-teal-500"
               >
-                {MEDICATIONS_DB.map((option) => (
+                {availableMeds.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.name}
                   </option>

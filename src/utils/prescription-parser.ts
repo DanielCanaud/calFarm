@@ -1,13 +1,8 @@
 import { MEDICATIONS_DB } from '@/data/medications-db';
 import { PrescriptionItem } from '@/types/pharma';
+import { normalizePlain } from '@/utils/phonetic-search';
 
-function normalizeStr(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
-}
+const DEFAULT_DOSAGE_PLACEHOLDER = '1 unidade por tomada (conferir)';
 
 export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
   const lines = rawText
@@ -22,15 +17,15 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
   const concentrationRegex =
     /\b(\d+(?:[.,]\d+)?\s*(?:mg\/ml|mg\/5\s*ml|mcg\/ml|ui\/ml|mg|mcg|g|ml|%|ui))\b/i;
   const formRegex =
-    /\b(comprimidos?|comp\.?|capsulas?|caps\.?|gotas?|gts|solucao\s+oral|suspensao\s+oral|susp\.?|xarope|ampolas?|injetavel|pomada|creme|colirio|sach[eê]s?|sublingual)\b/i;
+    /\b(comprimidos?|comp\.?|c[aá]psulas?|c[aá]ps\.?|gotas?|gts|solu[cç][aã]o\s+oral|suspens[aã]o\s+oral|susp\.?|xarope|ampolas?|injet[aá]vel|pomada|creme|col[ií]rio|sach[eê]s?|envelopes?|sublingual)\b/i;
   const frequencyRegex =
-    /\b(de\s*\d+\s*\/\s*\d+\s*h(?:oras)?|\d+\s*\/\s*\d+\s*h(?:oras)?|a\s*cada\s*\d+\s*horas?|\d+\s*(?:vez|vezes|x)\s*ao\s*dia|1\s*x\s*\/?\s*dia|2\s*x\s*\/?\s*dia|3\s*x\s*\/?\s*dia|em\s*jejum|pela\s*manha|a\s*noite|ao\s*deitar|apos\s*o?\s*(?:almoco|jantar|cafe)|se\s*(?:dor|febre|necessario))\b/i;
+    /\b(de\s*\d+\s*\/\s*\d+\s*h(?:oras)?|\d+\s*\/\s*\d+\s*h(?:oras)?|a\s*cada\s*\d+\s*horas?|\d+\s*(?:vez|vezes|x)\s*ao\s*dia|1\s*x\s*\/?\s*dia|2\s*x\s*\/?\s*dia|3\s*x\s*\/?\s*dia|em\s*jejum|pela\s*manh[aã]|[aà]\s*noite|ao\s*deitar|ap[oó]s\s*o?\s*(?:almo[cç]o|jantar|caf[eé])|se\s*(?:dor|febre|necess[aá]rio))\b/i;
   const durationRegex =
-    /\b(por\s*\d+\s*(?:dias?|semanas?|meses)|durante\s*\d+\s*(?:dias?|semanas?)|uso\s*continuo)\b/i;
+    /\b(por\s*\d+\s*(?:dias?|semanas?|meses)|durante\s*\d+\s*(?:dias?|semanas?)|uso\s*cont[ií]nuo)\b/i;
   const routeRegex =
-    /\b(uso\s*oral|via\s*oral|\bvo\b|uso\s*interno|uso\s*externo|sublingual|\bsl\b|intramuscular|\bim\b|endovenos[oa]|\bev\b|\biv\b|uso\s*topico|uso\s*nasal|uso\s*oftalmico)\b/i;
+    /\b(uso\s*oral|via\s*oral|\bvo\b|uso\s*interno|uso\s*externo|sublingual|\bsl\b|intramuscular|\bim\b|endovenos[oa]|\bev\b|\biv\b|uso\s*t[oó]pico|uso\s*nasal|uso\s*oft[aá]lmico)\b/i;
   const dosageRegex =
-    /\b((?:tomar|aplicar|dar|administrar|ingerir)\s+\d+(?:[.,]\d+)?\s*(?:comprimidos?|comp\.?|capsulas?|gotas?|ml|colher(?:es)?)|^\d+\s*(?:comprimidos?|capsulas?|gotas?|ml))\b/i;
+    /\b((?:tomar|aplicar|dar|administrar|ingerir)\s+\d+(?:[.,]\d+)?\s*(?:comprimidos?|comp\.?|c[aá]psulas?|gotas?|ml|colher(?:es)?)|^\d+\s*(?:comprimidos?|c[aá]psulas?|gotas?|ml))\b/i;
 
   // Ignorar cabeçalhos médicos comuns
   const ignoreLineRegex =
@@ -42,14 +37,14 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
       continue;
     }
 
-    const normLine = normalizeStr(line);
+    const normLine = normalizePlain(line);
 
     // Verifica se a linha casa com algum medicamento do banco de dados
     const matchedMed = MEDICATIONS_DB.find((med) => {
-      const medNameFirst = normalizeStr(med.name.split('(')[0]);
-      const activeFirst = normalizeStr(med.activeIngredient.split('(')[0]).split(' ')[0];
+      const medNameFirst = normalizePlain(med.name.split('(')[0]);
+      const activeFirst = normalizePlain(med.activeIngredient.split('(')[0]).split(' ')[0];
       const genericsMatch = med.genericsAndSimilars.some((g) => {
-        const gClean = normalizeStr(g.split('(')[0]);
+        const gClean = normalizePlain(g.split('(')[0]);
         return gClean.length >= 4 && normLine.includes(gClean);
       });
       return (
@@ -63,7 +58,7 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
     const startsWithNumberOrBullet = /^(\d+[\.\)\-\s]+|[-•*]\s+)/.test(line);
     const hasConcentration = concentrationRegex.test(line);
     const isPosologyContinuation =
-      /^(tomar|aplicar|dar|ingerir|diluir|posologia\s*:|obs\s*:)/i.test(line) && !startsWithNumberOrBullet;
+      /^(tomar|aplicar|dar|ingerir|diluir|dissolver|posologia\s*:|obs\s*:)/i.test(line) && !startsWithNumberOrBullet;
 
     if (isPosologyContinuation && currentItem) {
       // É a linha de posologia abaixo do nome do medicamento!
@@ -74,7 +69,11 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
       const routeMatch = line.match(routeRegex);
 
       if (doseMatch) currentItem.dosage = doseMatch[0];
-      else if (!currentItem.dosage || currentItem.dosage === 'A conferir') {
+      else if (
+        !currentItem.dosage ||
+        currentItem.dosage === 'A conferir' ||
+        currentItem.dosage === DEFAULT_DOSAGE_PLACEHOLDER
+      ) {
         currentItem.dosage = line;
       }
       if (freqMatch) currentItem.frequency = freqMatch[0];

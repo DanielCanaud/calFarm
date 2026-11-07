@@ -20,6 +20,11 @@ import {
   COMMON_PHARMA_COMPOUNDS,
   MANIPULATION_FEQ_PRESETS,
 } from '@/data/medications-db';
+import {
+  calculateDilution,
+  calculateMagistralWeighing,
+  calculateCockcroftGault,
+} from '@/utils/pharma-math';
 
 type CalcTab =
   | 'dilution'
@@ -98,59 +103,15 @@ export default function PharmaCalculator() {
 
   // Cálculos Memoizados
   const dilutionResult = useMemo(() => {
-    const numC1 = parseFloat(c1);
-    const numV1 = parseFloat(v1);
-    const numC2 = parseFloat(c2);
-    const numV2 = parseFloat(v2);
-
-    if (solveFor === 'V1') {
-      if (!numC1 || !numC2 || !numV2 || numC1 <= 0) return null;
-      const resV1 = (numC2 * numV2) / numC1;
-      const diluent = numV2 - resV1;
-      return {
-        label: `Volume da Solução Estoque (V₁)`,
-        value: `${resV1.toFixed(2)} ${volUnit}`,
-        diluent: diluent >= 0 ? `${diluent.toFixed(2)} ${volUnit}` : 'Concentração estoque menor que a final desejada!',
-        formulaStep: `V₁ = (C₂ × V₂) / C₁ = (${numC2} × ${numV2}) / ${numC1} = ${resV1.toFixed(2)} ${volUnit}`,
-        warning: resV1 > numV2 ? 'Atenção: C₁ precisa ser maior que C₂ para realizar uma diluição.' : null,
-      };
-    }
-    if (solveFor === 'C2') {
-      if (!numC1 || !numV1 || !numV2 || numV2 <= 0) return null;
-      const resC2 = (numC1 * numV1) / numV2;
-      const diluent = numV2 - numV1;
-      return {
-        label: `Concentração Final (C₂)`,
-        value: `${resC2.toFixed(3)} ${concUnit}`,
-        diluent: diluent >= 0 ? `${diluent.toFixed(2)} ${volUnit}` : 'V₂ deve ser maior que V₁',
-        formulaStep: `C₂ = (C₁ × V₁) / V₂ = (${numC1} × ${numV1}) / ${numV2} = ${resC2.toFixed(3)} ${concUnit}`,
-        warning: null,
-      };
-    }
-    if (solveFor === 'V2') {
-      if (!numC1 || !numV1 || !numC2 || numC2 <= 0) return null;
-      const resV2 = (numC1 * numV1) / numC2;
-      const diluent = resV2 - numV1;
-      return {
-        label: `Volume Final Total (V₂)`,
-        value: `${resV2.toFixed(2)} ${volUnit}`,
-        diluent: diluent >= 0 ? `${diluent.toFixed(2)} ${volUnit}` : 'N/A',
-        formulaStep: `V₂ = (C₁ × V₁) / C₂ = (${numC1} × ${numV1}) / ${numC2} = ${resV2.toFixed(2)} ${volUnit}`,
-        warning: null,
-      };
-    }
-    if (solveFor === 'C1') {
-      if (!numV1 || !numC2 || !numV2 || numV1 <= 0) return null;
-      const resC1 = (numC2 * numV2) / numV1;
-      return {
-        label: `Concentração Inicial Necessária (C₁)`,
-        value: `${resC1.toFixed(2)} ${concUnit}`,
-        diluent: `${(numV2 - numV1).toFixed(2)} ${volUnit}`,
-        formulaStep: `C₁ = (C₂ × V₂) / V₁ = (${numC2} × ${numV2}) / ${numV1} = ${resC1.toFixed(2)} ${concUnit}`,
-        warning: null,
-      };
-    }
-    return null;
+    return calculateDilution({
+      solveFor,
+      c1: parseFloat(c1),
+      v1: parseFloat(v1),
+      c2: parseFloat(c2),
+      v2: parseFloat(v2),
+      concUnit,
+      volUnit,
+    });
   }, [solveFor, c1, v1, c2, v2, concUnit, volUnit]);
 
   const concentrationMetrics = useMemo(() => {
@@ -1297,27 +1258,25 @@ export default function PharmaCalculator() {
             </div>
 
             {(() => {
-              const age = parseFloat(patientAge);
-              const weight = parseFloat(patientWeight);
-              const scr = parseFloat(serumCreatinine);
-              if (!age || !weight || !scr || scr <= 0) return null;
-              let clcr = ((140 - age) * weight) / (72 * scr);
-              if (patientSex === 'F') clcr *= 0.85;
+              const res = calculateCockcroftGault({
+                age: parseFloat(patientAge),
+                weightKg: parseFloat(patientWeight),
+                serumCreatinineMgDl: parseFloat(serumCreatinine),
+                sex: patientSex,
+              });
+              if (!res) return null;
               return (
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5">
                   <div className="flex justify-between items-center">
                     <span className="text-xs text-slate-600">Clearance Estimado (ClCr):</span>
                     <span className="text-base font-bold text-teal-700">
-                      {clcr.toFixed(1)} mL/min
+                      {res.clcr.toFixed(1)} mL/min
                     </span>
                   </div>
-                  <div className="text-[11px] text-slate-600">
-                    {clcr >= 60
-                      ? 'Função renal preservada ou redução leve (geralmente sem ajuste).'
-                      : clcr >= 30
-                      ? 'Insuficiência renal moderada: checar ajuste de antimicrobianos, DOACs e metformina.'
-                      : 'Insuficiência renal grave (< 30 mL/min): exige ajuste rigoroso de doses!'}
-                  </div>
+                  <div className="text-[11px] text-slate-600">{res.stageMessage}</div>
+                  {res.warning && (
+                    <div className="text-[11px] text-amber-700 font-medium">{res.warning}</div>
+                  )}
                 </div>
               );
             })()}
@@ -1474,23 +1433,27 @@ export default function PharmaCalculator() {
               const capVol = parseFloat(capsuleVolumeMl) || 0.5;
               const dens = parseFloat(powderDensity) || 0.65;
 
-              if (!dose || dose <= 0 || teor <= 0) return null;
+              const mag = calculateMagistralWeighing({
+                prescribedDoseMg: dose,
+                feq,
+                assayPercent: teor,
+                moisturePercent: umid,
+                numCapsules: nCaps,
+                capsuleVolumeMl: capVol,
+                powderDensity: dens,
+              });
 
-              const effectiveAssay = teor * (1 - umid / 100);
-              const fc = 100 / effectiveAssay;
-              const factorCombined = feq * fc;
-              const correctedDosePerCapMg = dose * factorCombined;
-              const totalActiveToWeighMg = correctedDosePerCapMg * nCaps;
-              const totalActiveToWeighG = totalActiveToWeighMg / 1000;
+              if (!mag) return null;
 
-              // Volume ocupado pelo princípio ativo e cálculo do excipiente
-              const totalCapsulesVolumeMl = capVol * nCaps;
-              const activeVolumeMl = totalActiveToWeighG / dens;
-              const remainingVolumeForExcipientMl = Math.max(
-                0,
-                totalCapsulesVolumeMl - activeVolumeMl
-              );
-              const excipientMassG = remainingVolumeForExcipientMl * dens;
+              const {
+                fc,
+                factorCombined,
+                correctedDosePerCapMg,
+                totalActiveToWeighMg,
+                totalActiveToWeighG,
+                excipientMassG,
+                overflowWarning,
+              } = mag;
 
               return (
                 <div className="space-y-3">
@@ -1514,6 +1477,12 @@ export default function PharmaCalculator() {
                       </div>
                     </div>
                   </div>
+
+                  {overflowWarning && (
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-medium">
+                      {overflowWarning}
+                    </div>
+                  )}
 
                   <div className="bg-white p-4 rounded-xl border border-teal-300 shadow-2xs space-y-2">
                     <div className="flex justify-between items-center">

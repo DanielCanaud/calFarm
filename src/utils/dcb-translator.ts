@@ -1,0 +1,266 @@
+import { normalizePlain } from '@/utils/phonetic-search';
+
+// Mapa unificado DCB (Português) -> INN/USP (Inglês) para enriquecimento no OpenFDA / NIH RxNorm
+const EXPLICIT_DCB_TO_INN_MAP: Record<string, string> = {
+  dipirona: 'metamizole',
+  paracetamol: 'acetaminophen',
+  'acido valproico': 'valproic acid',
+  valproato: 'valproic acid',
+  divalproato: 'valproic acid',
+  depakene: 'valproic acid',
+  depaquene: 'valproic acid',
+  depakote: 'divalproex sodium',
+  amoxicilina: 'amoxicillin',
+  azitromicina: 'azithromycin',
+  losartana: 'losartan',
+  omeprazol: 'omeprazole',
+  pantoprazol: 'pantoprazole',
+  esomeprazol: 'esomeprazole',
+  lansoprazol: 'lansoprazole',
+  rabeprazol: 'rabeprazole',
+  metformina: 'metformin',
+  sinvastatina: 'simvastatin',
+  atorvastatina: 'atorvastatin',
+  rosuvastatina: 'rosuvastatin',
+  clonazepam: 'clonazepam',
+  rivotril: 'clonazepam',
+  diazepam: 'diazepam',
+  valium: 'diazepam',
+  alprazolam: 'alprazolam',
+  frontal: 'alprazolam',
+  bromazepam: 'bromazepam',
+  lexotan: 'bromazepam',
+  lorazepam: 'lorazepam',
+  midazolam: 'midazolam',
+  zolpidem: 'zolpidem',
+  stilnox: 'zolpidem',
+  sertralina: 'sertraline',
+  zoloft: 'sertraline',
+  fluoxetina: 'fluoxetine',
+  prozac: 'fluoxetine',
+  escitalopram: 'escitalopram',
+  lexapro: 'escitalopram',
+  citalopram: 'citalopram',
+  paroxetina: 'paroxetine',
+  venlafaxina: 'venlafaxine',
+  desvenlafaxina: 'desvenlafaxine',
+  duloxetina: 'duloxetine',
+  amitriptilina: 'amitriptyline',
+  nortriptilina: 'nortriptyline',
+  bupropiona: 'bupropion',
+  trazodona: 'trazodone',
+  mirtazapina: 'mirtazapine',
+  prednisona: 'prednisone',
+  prednisolona: 'prednisolone',
+  dexametasona: 'dexamethasone',
+  betametasona: 'betamethasone',
+  hidrocortisona: 'hydrocortisone',
+  levotiroxina: 'levothyroxine',
+  enalapril: 'enalapril',
+  captopril: 'captopril',
+  ramipril: 'ramipril',
+  lisinopril: 'lisinopril',
+  hidroclorotiazida: 'hydrochlorothiazide',
+  clortalidona: 'chlorthalidone',
+  indapamida: 'indapamide',
+  furosemida: 'furosemide',
+  lasix: 'furosemide',
+  espironolactona: 'spironolactone',
+  anlodipino: 'amlodipine',
+  nifedipino: 'nifedipine',
+  atenolol: 'atenolol',
+  propranolol: 'propranolol',
+  metoprolol: 'metoprolol',
+  carvedilol: 'carvedilol',
+  nebivolol: 'nebivolol',
+  bisoprolol: 'bisoprolol',
+  ciprofloxacino: 'ciprofloxacin',
+  levofloxacino: 'levofloxacin',
+  norfloxacino: 'norfloxacin',
+  moxifloxacino: 'moxifloxacin',
+  cefalexina: 'cephalexin',
+  cefadroxila: 'cefadroxil',
+  cefuroxima: 'cefuroxime',
+  ceftriaxona: 'ceftriaxone',
+  ceftazidima: 'ceftazidime',
+  cefepima: 'cefepime',
+  claritromicina: 'clarithromycin',
+  eritromicina: 'erythromycin',
+  clindamicina: 'clindamycin',
+  metronidazol: 'metronidazole',
+  secnidazol: 'secnidazole',
+  tinidazol: 'tinidazole',
+  fluconazol: 'fluconazole',
+  itraconazol: 'itraconazole',
+  cetoconazol: 'ketoconazole',
+  nistatina: 'nystatin',
+  aciclovir: 'acyclovir',
+  valaciclovir: 'valacyclovir',
+  oseltamivir: 'oseltamivir',
+  ivermectina: 'ivermectin',
+  albendazol: 'albendazole',
+  mebendazol: 'mebendazole',
+  nitazoxanida: 'nitazoxanide',
+  ibuprofeno: 'ibuprofen',
+  cetoprofeno: 'ketoprofen',
+  toragesic: 'ketorolac',
+  cetorolaco: 'ketorolac',
+  naproxeno: 'naproxen',
+  diclofenaco: 'diclofenac',
+  nimesulida: 'nimesulide',
+  meloxicam: 'meloxicam',
+  piroxicam: 'piroxicam',
+  celecoxibe: 'celecoxib',
+  etoricoxibe: 'etoricoxib',
+  tramadol: 'tramadol',
+  codeina: 'codeine',
+  morfina: 'morphine',
+  metadona: 'methadone',
+  fentanila: 'fentanyl',
+  oxicodona: 'oxycodone',
+  carbamazepina: 'carbamazepine',
+  tegretol: 'carbamazepine',
+  oxcarbazepina: 'oxcarbazepine',
+  fenitoina: 'phenytoin',
+  fenobarbital: 'phenobarbital',
+  lamotrigina: 'lamotrigine',
+  topiramato: 'topiramate',
+  levetiracetam: 'levetiracetam',
+  pregabalina: 'pregabalin',
+  gabapentina: 'gabapentin',
+  quetiapina: 'quetiapine',
+  risperidona: 'risperidone',
+  olanzapina: 'olanzapine',
+  aripiprazol: 'aripiprazole',
+  clozapina: 'clozapine',
+  haloperidol: 'haloperidol',
+  clorpromazina: 'chlorpromazine',
+  levomepromazina: 'levomepromazine',
+  litio: 'lithium',
+  metilfenidato: 'methylphenidate',
+  ritalina: 'methylphenidate',
+  lisdexanfetamina: 'lisdexamfetamine',
+  venvanse: 'lisdexamfetamine',
+  loratadina: 'loratadine',
+  desloratadina: 'desloratadine',
+  cetirizina: 'cetirizine',
+  levocetirizina: 'levocetirizine',
+  fexofenadina: 'fexofenadine',
+  bilastina: 'bilastine',
+  dexclorfeniramina: 'dexchlorpheniramine',
+  polaramine: 'dexchlorpheniramine',
+  prometazina: 'promethazine',
+  hidroxizina: 'hydroxyzine',
+  ondansetrona: 'ondansetron',
+  vonau: 'ondansetron',
+  metoclopramida: 'metoclopramide',
+  bromoprida: 'bromopride',
+  domperidona: 'domperidone',
+  dimenidrinato: 'dimenhydrinate',
+  dramin: 'dimenhydrinate',
+  meclizina: 'meclizine',
+  escopolamina: 'scopolamine',
+  buscopan: 'scopolamine',
+  rivaroxabana: 'rivaroxaban',
+  apixabana: 'apixaban',
+  dabigatrana: 'dabigatran',
+  edoxabana: 'edoxaban',
+  varfarina: 'warfarin',
+  marevan: 'warfarin',
+  enoxaparina: 'enoxaparin',
+  heparina: 'heparin',
+  clopidogrel: 'clopidogrel',
+  ticagrelor: 'ticagrelor',
+  'acido acetilsalicilico': 'aspirin',
+  salbutamol: 'albuterol',
+  aerolin: 'albuterol',
+  fenoterol: 'fenoterol',
+  formoterol: 'formoterol',
+  salmeterol: 'salmeterol',
+  ipratropio: 'ipratropium',
+  tiotropio: 'tiotropium',
+  budesonida: 'budesonide',
+  fluticasona: 'fluticasone',
+  beclometasona: 'beclomethasone',
+  montelucaste: 'montelukast',
+  acebrofilina: 'acebrophylline',
+  ambroxol: 'ambroxol',
+  acetilcisteina: 'acetylcysteine',
+  carbocisteina: 'carbocisteine',
+  isotretinoina: 'isotretinoin',
+  roacutan: 'isotretinoin',
+  sildenafila: 'sildenafil',
+  tadalafila: 'tadalafil',
+  tansulosina: 'tamsulosin',
+  finasterida: 'finasteride',
+  dutasterida: 'dutasteride',
+  alopurinol: 'allopurinol',
+  colchicina: 'colchicine',
+  alendronato: 'alendronate',
+  insulina: 'insulin',
+  semaglutida: 'semaglutide',
+  ozempic: 'semaglutide',
+  wegovy: 'semaglutide',
+  tirzepatida: 'tirzepatide',
+  mounjaro: 'tirzepatide',
+  liraglutida: 'liraglutide',
+  dulaglutida: 'dulaglutide',
+  empagliflozina: 'empagliflozin',
+  dapagliflozina: 'dapagliflozin',
+  gliclazida: 'gliclazide',
+  glimepirida: 'glimepiride',
+  glibenclamida: 'glyburide',
+  pioglitazona: 'pioglitazone',
+  sitagliptina: 'sitagliptin',
+  vildagliptina: 'vildagliptin',
+  linagliptina: 'linagliptin',
+};
+
+/**
+ * Sanitiza parâmetros de busca farmacêutica para evitar injeção de operadores Lucene
+ * (como aspas, wildcards ou cláusulas booleanas) e limita o tamanho máximo.
+ */
+export function sanitizePharmaSearchTerm(input: string, maxLength = 100): string {
+  return input
+    .replace(/[^a-zA-ZÀ-ÿ0-9\s\-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLength);
+}
+
+/**
+ * Converte um nome de princípio ativo ou medicamento em português (DCB) para sua
+ * denominação internacional em inglês (INN/USP).
+ */
+export function dcbToEnglishInn(dcb: string): string {
+  const firstSubstance = dcb.split(';')[0].trim();
+  const clean = normalizePlain(firstSubstance)
+    .replace(
+      /^(cloridrato|maleato|besilato|hemitartarato|hemi-hidratado|succinato|tartarato|bromidrato|sulfato|fosfato|acetato|valerato|propionato|fumarato|oxalato|mesilato|citrato|nitrato|brometo|cloreto|valproato|divalproato)\s+de\s+/i,
+      ''
+    )
+    .replace(
+      /\s+(sodico|sodica|potassico|potassica|calcico|calcica|di-hidratado|di-hidratada|tri-hidratado|tri-hidratada|monoidratado|monoidratada|anidro|anidra|micronizado|micronizada)$/i,
+      ''
+    )
+    .trim();
+
+  for (const [pt, en] of Object.entries(EXPLICIT_DCB_TO_INN_MAP)) {
+    if (clean.includes(pt)) return en;
+  }
+
+  return clean
+    .replace(/qu([ei])/g, 'k$1')
+    .replace(/ina$/, 'ine')
+    .replace(/sartana$/, 'sartan')
+    .replace(/vastatina$/, 'vastatin')
+    .replace(/floxacino$/, 'floxacin')
+    .replace(/cilina$/, 'cillin')
+    .replace(/micina$/, 'mycin')
+    .replace(/prazol$/, 'prazole')
+    .replace(/dipino$/, 'dipine')
+    .replace(/bamato$/, 'bamate')
+    .replace(/feno$/, 'fen')
+    .replace(/zepam$/, 'zepam')
+    .replace(/zolam$/, 'zolam');
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   FileText,
   Upload,
@@ -21,6 +21,18 @@ import {
 import { PrescriptionItem } from '@/types/pharma';
 import { parsePrescriptionText } from '@/utils/prescription-parser';
 import { MEDICATIONS_DB } from '@/data/medications-db';
+import { findPairwiseInteractions } from '@/utils/interactions';
+
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
+
+function fileToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
 
 const SAMPLE_PRESCRIPTIONS = [
   {
@@ -94,10 +106,24 @@ export default function PrescriptionReader() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   // Processa upload de Imagem (PNG, JPG, WEBP) ou PDF/TXT
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setEngineUsed('Arquivo excede 5 MB — envie uma imagem ou PDF menor.');
+      e.target.value = '';
+      return;
+    }
 
     setUploadedFileName(file.name);
     setIsProcessing(true);
@@ -109,15 +135,9 @@ export default function PrescriptionReader() {
         const objectUrl = URL.createObjectURL(file);
         setPreviewUrl(objectUrl);
 
-        // Converte para base64 caso o usuário tenha configurado chave Gemini Vision
-        const base64 = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(String(reader.result));
-          reader.readAsDataURL(file);
-        });
-
         if (geminiApiKey.trim()) {
           setOcrProgress(45);
+          const base64 = await fileToBase64(file);
           const res = await fetch('/api/prescription/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -157,15 +177,8 @@ export default function PrescriptionReader() {
       } else if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
         setPreviewUrl(null);
         // Extração de texto de PDF ou envio à API Gemini se chave configurada
-        const arrayBuffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-
         if (geminiApiKey.trim()) {
-          let binary = '';
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          const base64Pdf = btoa(binary);
+          const base64Pdf = await fileToBase64(file);
           const res = await fetch('/api/prescription/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -185,6 +198,9 @@ export default function PrescriptionReader() {
             }
           }
         }
+
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
 
         // Extrator leve de strings legíveis de PDF digitais
         const decoder = new TextDecoder('latin1');
@@ -209,10 +225,11 @@ export default function PrescriptionReader() {
         setItems(parsePrescriptionText(textContent));
       }
     } catch {
-      // Em caso de falha no OCR, preserva edição manual
+      setEngineUsed('Falha na leitura automática — utilize ou edite o texto manualmente abaixo');
     } finally {
       setIsProcessing(false);
       setOcrProgress(0);
+      e.target.value = '';
     }
   };
 
@@ -270,45 +287,13 @@ export default function PrescriptionReader() {
     setItems((prev) => prev.filter((item) => item.id !== id));
   };
 
-  // Detecta automaticamente interações medicamentosas entre os itens da mesma prescrição!
+  // Detecta automaticamente interações medicamentosas entre os itens da mesma prescrição (simétrico A <-> B)!
   const prescriptionInteractions = useMemo(() => {
     const matchedMeds = items
       .map((it) => MEDICATIONS_DB.find((m) => m.id === it.matchedMedicationId))
       .filter((m): m is NonNullable<typeof m> => Boolean(m));
 
-    const foundAlerts: Array<{ pair: string; severity: string; effect: string; conduct: string }> =
-      [];
-
-    for (let i = 0; i < matchedMeds.length; i++) {
-      for (let j = i + 1; j < matchedMeds.length; j++) {
-        const medA = matchedMeds[i];
-        const medB = matchedMeds[j];
-
-        // Verifica se medA menciona medB ou sua classe nas interações
-        medA.interactions.forEach((inter) => {
-          const target = inter.interactingSubstance.toLowerCase();
-          const bName = medB.activeIngredient.toLowerCase();
-          const bClass = medB.therapeuticClass.toLowerCase();
-          const bGroup = medB.pharmacologicalGroup.toLowerCase();
-
-          if (
-            target.includes(bName.split(' ')[0]) ||
-            (target.includes('aine') && (bClass.includes('aine') || bGroup.includes('cox'))) ||
-            (target.includes('diurético') && bClass.includes('diurético')) ||
-            (target.includes('ieca') && bGroup.includes('ieca')) ||
-            (target.includes('bra') && bGroup.includes('bra'))
-          ) {
-            foundAlerts.push({
-              pair: `${medA.name.split('(')[0].trim()} + ${medB.name.split('(')[0].trim()}`,
-              severity: inter.severity,
-              effect: inter.effect,
-              conduct: inter.conduct,
-            });
-          }
-        });
-      }
-    }
-    return foundAlerts;
+    return findPairwiseInteractions(matchedMeds);
   }, [items]);
 
   const verifiedCount = items.filter((i) => i.verified).length;

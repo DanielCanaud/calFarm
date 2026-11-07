@@ -26,9 +26,10 @@ import {
   TOXICOLOGY_ANTIDOTES,
 } from '@/data/medications-db';
 import { LiveApiEnrichment, Medication } from '@/types/pharma';
+import { matchesPharmaQuery, normalizePlain } from '@/utils/phonetic-search';
 
 interface MedicationSearchProps {
-  onSendToComparator?: (medId: string) => void;
+  onSendToComparator?: (medId: string, fullMed?: Medication) => void;
 }
 
 export default function MedicationSearch({ onSendToComparator }: MedicationSearchProps) {
@@ -39,6 +40,9 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
   const [liveData, setLiveData] = useState<LiveApiEnrichment | null>(null);
   const [loadingLive, setLoadingLive] = useState<boolean>(false);
   const [dynamicResults, setDynamicResults] = useState<Medication[]>([]);
+  const [anvisaResults, setAnvisaResults] = useState<Medication[]>([]);
+  const [anvisaTotalMatches, setAnvisaTotalMatches] = useState<number>(0);
+  const [loadingAnvisa, setLoadingAnvisa] = useState<boolean>(false);
 
   const therapeuticClasses = useMemo(() => {
     const set = new Set<string>(['Todos']);
@@ -46,16 +50,44 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
     return Array.from(set);
   }, []);
 
+  // Consulta automática na Base Oficial de Dados Abertos da ANVISA / CMED (6.423 medicamentos / 26.642 apresentações)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setAnvisaResults([]);
+      setAnvisaTotalMatches(0);
+      setLoadingAnvisa(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingAnvisa(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/medications/anvisa?q=${encodeURIComponent(q)}&limit=35`);
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setAnvisaResults(data.results || []);
+          setAnvisaTotalMatches(data.totalMatches || 0);
+        }
+      } catch {
+        // Silencioso
+      } finally {
+        if (!cancelled) setLoadingAnvisa(false);
+      }
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
+
   const filteredMedications = useMemo(() => {
-    const q = searchQuery
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .trim();
+    const q = searchQuery.trim();
 
-    const baseList = [...MEDICATIONS_DB, ...dynamicResults];
-
-    return baseList.filter((m) => {
+    // 1. Filtra as monografias acadêmicas completas (com busca fonética: ex. "depaquene" acha "Depakene")
+    const curatedMatches = [...MEDICATIONS_DB, ...dynamicResults].filter((m) => {
       const matchesClass =
         selectedClassFilter === 'Todos' || m.therapeuticClass === selectedClassFilter;
       if (!q) return matchesClass;
@@ -69,15 +101,40 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
         m.atcCode,
         ...m.genericsAndSimilars,
         ...m.indications,
-      ]
-        .join(' ')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
+      ].join(' ');
 
-      return matchesClass && haystack.includes(q);
+      return matchesClass && matchesPharmaQuery(haystack, q);
     });
-  }, [searchQuery, selectedClassFilter, dynamicResults]);
+
+    if (!q) return curatedMatches;
+
+    // 2. Mescla com os resultados oficiais da ANVISA/CMED evitando duplicatas óbvias
+    const seenIds = new Set(curatedMatches.map((m) => m.id));
+    const merged = [...curatedMatches];
+
+    for (const anvisaMed of anvisaResults) {
+      if (seenIds.has(anvisaMed.id)) continue;
+      if (selectedClassFilter !== 'Todos') {
+        const filterNorm = normalizePlain(selectedClassFilter);
+        const medClassNorm = normalizePlain(anvisaMed.therapeuticClass);
+        if (!medClassNorm.includes(filterNorm.split(' ')[0])) continue;
+      }
+      seenIds.add(anvisaMed.id);
+      merged.push(anvisaMed);
+    }
+
+    return merged;
+  }, [searchQuery, selectedClassFilter, dynamicResults, anvisaResults]);
+
+  // Seleciona automaticamente o primeiro resultado quando a busca muda e o item atual não está na lista filtrada
+  useEffect(() => {
+    if (filteredMedications.length > 0) {
+      const stillVisible = filteredMedications.some((m) => m.id === selectedMed?.id);
+      if (!stillVisible) {
+        setSelectedMed(filteredMedications[0]);
+      }
+    }
+  }, [filteredMedications, selectedMed?.id]);
 
   // Busca dados em tempo real na API (OpenFDA + RxNorm NIH) sempre que um medicamento é selecionado
   useEffect(() => {
@@ -149,15 +206,20 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
       <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200/60 mb-2">
-              <Globe className="w-3.5 h-3.5" />
-              Base RENAME / Bulário ANVISA + Integração OpenFDA & NIH RxNorm
-            </span>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-teal-50 text-teal-700 border border-teal-200/60">
+                <Globe className="w-3.5 h-3.5" />
+                Dados Abertos ANVISA / CMED (6.423 Medicamentos • 26.642 Apresentações)
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                2.264 Princípios Ativos (DCB) + OpenFDA & NIH RxNorm
+              </span>
+            </div>
             <h2 className="text-xl font-semibold text-slate-800">
               Buscador Clínico de Medicamentos e Bulas
             </h2>
             <p className="text-sm text-slate-500 mt-0.5">
-              Pesquise pelo nome comercial, princípio ativo (DCB), genérico, indicação ou código ATC.
+              Pesquise por qualquer nome comercial do Brasil (ex: Depakene, Roacutan, Ritalina, Vonau, Buscopan), princípio ativo (DCB), genérico ou classe terapêutica — com busca fonética inteligente.
             </p>
           </div>
 
@@ -212,9 +274,12 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
                       handleExternalApiSearch();
                     }
                   }}
-                  placeholder="Ex: Dipirona, Amoxicilina, Losartana, Rivotril, Omeprazol, Xarelto, Atenolol..."
+                  placeholder="Ex: Depakene (ou depaquene), Roacutan, Ritalina, Venvanse, Dipirona, Losartana, Vonau..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-teal-500"
                 />
+                {loadingAnvisa && (
+                  <Loader2 className="w-4 h-4 text-teal-600 animate-spin absolute right-3.5 top-1/2 -translate-y-1/2" />
+                )}
               </div>
               <button
                 onClick={handleExternalApiSearch}
@@ -229,6 +294,23 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
                 Consultar API Externa (FDA/NIH)
               </button>
             </div>
+
+            {searchQuery.trim().length >= 2 && (
+              <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+                <span>
+                  Exibindo <strong>{filteredMedications.length}</strong> resultado(s)
+                  {anvisaTotalMatches > 0 && (
+                    <> (<strong>{anvisaTotalMatches}</strong> registros encontrados na base oficial ANVISA/CMED)</>
+                  )}
+                </span>
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="text-teal-700 hover:underline font-medium cursor-pointer"
+                >
+                  Limpar busca
+                </button>
+              </div>
+            )}
 
             {/* Filtro Rápido por Classe Terapêutica */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -452,8 +534,13 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
                       Risco Gestacional: Categoria {selectedMed.pregnancyCategory}
                     </span>
                     <span className="text-xs font-mono px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                      ATC: {selectedMed.atcCode}
+                      ATC/Classe: {selectedMed.atcCode}
                     </span>
+                    {selectedMed.anvisaRegistry && (
+                      <span className="text-xs font-mono px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200/70">
+                        Reg. ANVISA: {selectedMed.anvisaRegistry}
+                      </span>
+                    )}
                   </div>
                   <h2 className="text-2xl font-bold text-slate-800">
                     {selectedMed.name}
@@ -465,7 +552,7 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
 
                 {onSendToComparator && (
                   <button
-                    onClick={() => onSendToComparator(selectedMed.id)}
+                    onClick={() => onSendToComparator(selectedMed.id, selectedMed)}
                     className="px-3.5 py-2 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200/80 text-xs font-medium flex items-center gap-1.5 shrink-0 cursor-pointer transition-colors"
                   >
                     Comparar Medicamento
