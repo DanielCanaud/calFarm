@@ -68,12 +68,31 @@ export interface LiveApiEnrichment {
   fetchedAt: string;
 }
 
+export interface DuplicationAlert {
+  type: 'same_substance' | 'same_class';
+  substanceOrClass: string;
+  items: string[];
+  severity: 'Grave' | 'Moderada';
+  message: string;
+}
+
+export interface RegulatoryValidationResult {
+  isExpired: boolean;
+  daysElapsed: number | null;
+  maxValidDays: number | null;
+  regulationNotice: string;
+  prescriptionRequirement: string;
+  severity: 'Crítica' | 'Alerta' | 'Informativa';
+  details: string[];
+}
+
 export interface PrescriptionItem {
   id: string;
   rawLine: string;
   medicationName: string;
   matchedMedicationId?: string;
   activeIngredient?: string;
+  therapeuticClass?: string;
   concentration: string;
   pharmaceuticalForm: string;
   dosage: string;
@@ -82,6 +101,10 @@ export interface PrescriptionItem {
   route: string;
   confidence: 'Alta' | 'Média' | 'Revisão Manual';
   verified: boolean;
+  dailyCalculatedDose?: string;
+  maxDailyDoseAlert?: string;
+  duplicationAlert?: string;
+  regulatoryNotice?: string;
   notes?: string;
   alerts?: string[];
 }

@@ -36,7 +36,8 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
   const [subView, setSubView] = useState<'bulas' | 'deontologia' | 'toxicologia'>('bulas');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedClassFilter, setSelectedClassFilter] = useState<string>('Todos');
-  const [selectedMed, setSelectedMed] = useState<Medication>(MEDICATIONS_DB[0]);
+  const [selectedMedId, setSelectedMedId] = useState<string>(MEDICATIONS_DB[0].id);
+  const [manuallySelectedMed, setManuallySelectedMed] = useState<Medication | null>(null);
   const [liveData, setLiveData] = useState<LiveApiEnrichment | null>(null);
   const [loadingLive, setLoadingLive] = useState<boolean>(false);
   const [dynamicResults, setDynamicResults] = useState<Medication[]>([]);
@@ -53,16 +54,17 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
   // Consulta automática na Base Oficial de Dados Abertos da ANVISA / CMED (6.423 medicamentos / 26.642 apresentações)
   useEffect(() => {
     const q = searchQuery.trim();
-    if (q.length < 2) {
-      setAnvisaResults([]);
-      setAnvisaTotalMatches(0);
-      setLoadingAnvisa(false);
-      return;
-    }
-
     let cancelled = false;
-    setLoadingAnvisa(true);
+
     const timer = setTimeout(async () => {
+      if (q.length < 2) {
+        setAnvisaResults([]);
+        setAnvisaTotalMatches(0);
+        setLoadingAnvisa(false);
+        return;
+      }
+
+      setLoadingAnvisa(true);
       try {
         const res = await fetch(`/api/medications/anvisa?q=${encodeURIComponent(q)}&limit=35`);
         if (res.ok && !cancelled) {
@@ -126,15 +128,19 @@ export default function MedicationSearch({ onSendToComparator }: MedicationSearc
     return merged;
   }, [searchQuery, selectedClassFilter, dynamicResults, anvisaResults]);
 
-  // Seleciona automaticamente o primeiro resultado quando a busca muda e o item atual não está na lista filtrada
-  useEffect(() => {
-    if (filteredMedications.length > 0) {
-      const stillVisible = filteredMedications.some((m) => m.id === selectedMed?.id);
-      if (!stillVisible) {
-        setSelectedMed(filteredMedications[0]);
-      }
+  // Derivação pura do medicamento selecionado atual (sem cascading render)
+  const selectedMed = useMemo(() => {
+    if (manuallySelectedMed && manuallySelectedMed.id === selectedMedId) {
+      return manuallySelectedMed;
     }
-  }, [filteredMedications, selectedMed?.id]);
+    const found = filteredMedications.find((m) => m.id === selectedMedId);
+    return found || filteredMedications[0] || MEDICATIONS_DB[0];
+  }, [filteredMedications, selectedMedId, manuallySelectedMed]);
+
+  const setSelectedMed = (med: Medication) => {
+    setSelectedMedId(med.id);
+    setManuallySelectedMed(med);
+  };
 
   // Busca dados em tempo real na API (OpenFDA + RxNorm NIH) sempre que um medicamento é selecionado
   useEffect(() => {

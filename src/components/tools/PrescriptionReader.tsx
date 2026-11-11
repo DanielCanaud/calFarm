@@ -17,11 +17,20 @@ import {
   Eye,
   ClipboardCheck,
   Printer,
+  Calendar,
+  AlertOctagon,
+  Layers,
+  Lock,
+  ShieldCheck,
 } from 'lucide-react';
 import { PrescriptionItem } from '@/types/pharma';
 import { parsePrescriptionText } from '@/utils/prescription-parser';
-import { MEDICATIONS_DB } from '@/data/medications-db';
-import { findPairwiseInteractions } from '@/utils/interactions';
+import {
+  enrichItemWithClinicalSafety,
+  detectDuplications,
+  detectExpandedInteractions,
+  validatePrescriptionRegulations,
+} from '@/utils/clinical-safety';
 
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
@@ -103,6 +112,10 @@ export default function PrescriptionReader() {
   const [geminiApiKey, setGeminiApiKey] = useState<string>('');
   const [showApiConfig, setShowApiConfig] = useState<boolean>(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [prescriptionIssueDate, setPrescriptionIssueDate] = useState<string>(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+  const [safetyConfirmed, setSafetyConfirmed] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -258,12 +271,16 @@ export default function PrescriptionReader() {
 
   const handleUpdateItem = (id: string, field: keyof PrescriptionItem, value: string | boolean) => {
     setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const updated = { ...item, [field]: value };
+        return enrichItemWithClinicalSafety(updated);
+      })
     );
   };
 
   const handleAddEmptyItem = () => {
-    const newItem: PrescriptionItem = {
+    const rawNewItem: PrescriptionItem = {
       id: `manual-${Date.now()}`,
       rawLine: 'Adicionado manualmente',
       medicationName: 'Novo Medicamento',
@@ -279,6 +296,7 @@ export default function PrescriptionReader() {
       notes: '',
       alerts: [],
     };
+    const newItem = enrichItemWithClinicalSafety(rawNewItem);
     setItems((prev) => [...prev, newItem]);
     setEditingId(newItem.id);
   };
@@ -287,16 +305,24 @@ export default function PrescriptionReader() {
     setItems((prev) => prev.filter((item) => item.id !== id));
   };
 
-  // Detecta automaticamente interações medicamentosas entre os itens da mesma prescrição (simétrico A <-> B)!
-  const prescriptionInteractions = useMemo(() => {
-    const matchedMeds = items
-      .map((it) => MEDICATIONS_DB.find((m) => m.id === it.matchedMedicationId))
-      .filter((m): m is NonNullable<typeof m> => Boolean(m));
+  // 1. Validação Regulatória de Deontologia Farmacêutica (RDC 20/2011, Portaria 344/98 e Vencimento)
+  const regulatoryCheck = useMemo(() => {
+    return validatePrescriptionRegulations(items, prescriptionIssueDate);
+  }, [items, prescriptionIssueDate]);
 
-    return findPairwiseInteractions(matchedMeds);
+  // 2. Detecção Automática de Duplicidade Terapêutica (Mesma substância ou mesma classe AINE/IBP/etc.)
+  const duplicationAlerts = useMemo(() => {
+    return detectDuplications(items);
+  }, [items]);
+
+  // 3. Matriz Expandida de Interações Farmacológicas por Classe e Pares
+  const prescriptionInteractions = useMemo(() => {
+    return detectExpandedInteractions(items);
   }, [items]);
 
   const verifiedCount = items.filter((i) => i.verified).length;
+  const allVerified = items.length > 0 && verifiedCount === items.length;
+  const canPrintReport = allVerified && safetyConfirmed;
 
   return (
     <div className="space-y-6">
@@ -479,16 +505,134 @@ export default function PrescriptionReader() {
                   <Plus className="w-3.5 h-3.5" /> Adicionar Item
                 </button>
                 <button
-                  onClick={() => window.print()}
-                  className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium flex items-center gap-1 cursor-pointer"
-                  title="Imprimir ou Salvar PDF de Orientação Farmacêutica"
+                  onClick={() => {
+                    if (!canPrintReport) {
+                      alert(
+                        'Para a segurança clínica dos estudantes, todos os itens da receita médica devem ser conferidos individualmente e a trava pedagógica deve ser assinalada antes da impressão.'
+                      );
+                      return;
+                    }
+                    window.print();
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+                    canPrintReport
+                      ? 'bg-teal-600 hover:bg-teal-700 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-400 border border-slate-200'
+                  }`}
+                  title={
+                    canPrintReport
+                      ? 'Imprimir Guia de Orientação Farmacêutica'
+                      : 'Conferência completa e confirmação necessárias para liberar impressão'
+                  }
                 >
-                  <Printer className="w-3.5 h-3.5" /> Imprimir Orientação
+                  {canPrintReport ? (
+                    <Printer className="w-3.5 h-3.5" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                  {canPrintReport ? 'Imprimir Orientação' : 'Conferência Pendente'}
                 </button>
               </div>
             </div>
 
-            {/* Alerta Automático de Interações na Receita! */}
+            {/* 1. Bar de Deontologia & Validação Regulatória Sanitária (RDC 20 e Portaria 344) */}
+            <div
+              className={`p-4 rounded-xl border space-y-3 ${
+                regulatoryCheck.isExpired
+                  ? 'bg-rose-50/90 border-rose-300 text-rose-900'
+                  : 'bg-slate-50/80 border-slate-200/90 text-slate-800'
+              }`}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span className="text-xs font-semibold">Data de Emissão Médica:</span>
+                  <input
+                    type="date"
+                    value={prescriptionIssueDate}
+                    onChange={(e) => setPrescriptionIssueDate(e.target.value)}
+                    className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 bg-white text-slate-800 font-medium"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${
+                      regulatoryCheck.isExpired
+                        ? 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse'
+                        : 'bg-teal-50 text-teal-800 border-teal-200'
+                    }`}
+                  >
+                    {regulatoryCheck.regulationNotice}
+                  </span>
+                </div>
+              </div>
+
+              <div className="text-xs space-y-1">
+                <div className="font-semibold text-slate-700">
+                  Exigência de Receituário:{' '}
+                  <span className="text-teal-700 font-bold">
+                    {regulatoryCheck.prescriptionRequirement}
+                  </span>
+                </div>
+                {regulatoryCheck.details.map((detail, idx) => (
+                  <div
+                    key={idx}
+                    className={`text-[11px] flex items-center gap-1.5 ${
+                      regulatoryCheck.isExpired
+                        ? 'text-rose-800 font-bold'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    {regulatoryCheck.isExpired ? (
+                      <AlertOctagon className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    ) : (
+                      <ShieldCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                    )}
+                    {detail}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Trava Human-in-the-Loop Obrigatória para Proteção do Estudante */}
+            <label
+              className={`flex items-start gap-2.5 p-3 rounded-xl border text-xs cursor-pointer transition-colors ${
+                safetyConfirmed
+                  ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900'
+                  : 'bg-amber-50/70 border-amber-200 text-amber-900'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={safetyConfirmed}
+                onChange={(e) => setSafetyConfirmed(e.target.checked)}
+                className="mt-0.5 rounded text-teal-600 focus:ring-teal-500 h-4 w-4 shrink-0"
+              />
+              <span>
+                <strong>Trava Pedagógica de Segurança (Human-in-the-Loop):</strong> Declaro que comparei visualmente cada medicamento, dose calculada, intervalo e via contra o documento original da prescrição médica antes da validação final.
+              </span>
+            </label>
+
+            {/* 2. Alerta Automático de Duplicidade Terapêutica */}
+            {duplicationAlerts.length > 0 && (
+              <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-300 space-y-2">
+                <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-amber-600 shrink-0" />
+                  Atenção Farmacêutica: Duplicidade Terapêutica Detectada na Receita!
+                </div>
+                {duplicationAlerts.map((dup, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white/90 p-2.5 rounded-lg border border-amber-200 text-xs text-amber-900"
+                  >
+                    {dup.message}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* 3. Alerta Automático de Interações na Receita! */}
             {prescriptionInteractions.length > 0 && (
               <div className="p-4 rounded-xl bg-rose-50/70 border border-rose-200 space-y-2">
                 <div className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
@@ -535,9 +679,21 @@ export default function PrescriptionReader() {
                             {idx + 1}
                           </span>
                           <div>
-                            <h4 className="text-sm font-bold text-slate-800">
-                              {item.medicationName}
-                            </h4>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <h4 className="text-sm font-bold text-slate-800">
+                                {item.medicationName}
+                              </h4>
+                              {item.therapeuticClass && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium border border-slate-200">
+                                  {item.therapeuticClass}
+                                </span>
+                              )}
+                              {item.dailyCalculatedDose && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 font-bold border border-teal-200">
+                                  Dose: {item.dailyCalculatedDose}
+                                </span>
+                              )}
+                            </div>
                             <p className="text-xs text-teal-700 font-medium">
                               {item.activeIngredient}
                             </p>
@@ -686,6 +842,16 @@ export default function PrescriptionReader() {
                         </div>
                       )}
 
+                      {/* Alerta de Superdosagem Crítica */}
+                      {item.maxDailyDoseAlert && (
+                        <div className="mt-2.5 p-3 rounded-xl bg-rose-50 border border-rose-300 text-xs text-rose-900 flex items-start gap-2">
+                          <AlertOctagon className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                          <div className="font-semibold leading-relaxed">
+                            {item.maxDailyDoseAlert}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Alertas Regulatórios e Dica Clínica do Item */}
                       {item.alerts && item.alerts.length > 0 && (
                         <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -717,9 +883,23 @@ export default function PrescriptionReader() {
             </div>
 
             {items.length > 0 && verifiedCount === items.length && (
-              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-center gap-2">
-                <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <strong>Conferência Farmacêutica Concluída!</strong> Todos os {items.length} itens da prescrição foram revisados e validados manualmente.
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <FileCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Conferência Farmacêutica Concluída!</strong> Todos os {items.length} itens da prescrição foram revisados e validados.
+                    {!safetyConfirmed && (
+                      <span className="block sm:inline text-amber-800 font-medium sm:ml-1">
+                        (Assinale a Trava Pedagógica acima para desbloquear a impressão).
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {canPrintReport && (
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-600 text-white font-bold text-[10px] shrink-0 self-start sm:self-auto">
+                    Aprovado para Dispensação
+                  </span>
+                )}
               </div>
             )}
           </div>
