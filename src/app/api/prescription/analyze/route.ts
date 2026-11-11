@@ -3,6 +3,7 @@ import { parsePrescriptionText } from '@/utils/prescription-parser';
 import { PrescriptionItem } from '@/types/pharma';
 import { MEDICATIONS_DB } from '@/data/medications-db';
 import { normalizePlain } from '@/utils/phonetic-search';
+import { enrichItemWithClinicalSafety } from '@/utils/clinical-safety';
 
 const MAX_RAW_TEXT_LENGTH = 15_000; // ~15 KB de texto
 const MAX_BASE64_LENGTH = 7_000_000; // ~5 MB de arquivo binário em Base64
@@ -142,7 +143,7 @@ Retorne APENAS o JSON puro (array), sem markdown.`;
                   );
                 });
 
-                return {
+                const rawAiItem: PrescriptionItem = {
                   id: `ai-rx-${Date.now()}-${idx}`,
                   rawLine: sanitizeString(item?.medicationName, 'Extraído via IA Multimodal', 200),
                   medicationName: medName,
@@ -168,6 +169,8 @@ Retorne APENAS o JSON puro (array), sem markdown.`;
                         .map((a: string) => a.slice(0, 200))
                     : [],
                 };
+
+                return enrichItemWithClinicalSafety(rawAiItem);
               });
 
             return NextResponse.json({

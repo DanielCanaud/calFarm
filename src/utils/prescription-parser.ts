@@ -1,6 +1,10 @@
 import { MEDICATIONS_DB } from '@/data/medications-db';
 import { PrescriptionItem } from '@/types/pharma';
 import { normalizePlain } from '@/utils/phonetic-search';
+import {
+  enrichItemWithClinicalSafety,
+  identifyTherapeuticClass,
+} from '@/utils/clinical-safety';
 
 const DEFAULT_DOSAGE_PLACEHOLDER = '1 unidade por tomada (conferir)';
 
@@ -79,6 +83,9 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
       if (freqMatch) currentItem.frequency = freqMatch[0];
       if (durMatch) currentItem.duration = durMatch[0];
       if (routeMatch) currentItem.route = routeMatch[0];
+
+      // Reavalia segurança clínica (dose diária e teto máximo) com a posologia completa
+      Object.assign(currentItem, enrichItemWithClinicalSafety(currentItem));
       continue;
     }
 
@@ -103,6 +110,8 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
         }
       }
 
+      const inferredClass = identifyTherapeuticClass(`${extractedName} ${line}`);
+
       const alerts: string[] = [];
       if (matchedMed) {
         if (matchedMed.prescriptionType.includes('Notificação B')) {
@@ -113,14 +122,19 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
         if (matchedMed.pregnancyCategory === 'D' || matchedMed.pregnancyCategory === 'X') {
           alerts.push(`Alerta Gestação: Categoria ${matchedMed.pregnancyCategory} (Risco fetal documentado).`);
         }
+      } else if (inferredClass?.includes('Antimicrobiano')) {
+        alerts.push('RDC 20/2011 e 471/2021: Antimicrobiano. Validade estrita de 10 dias e retenção de 2ª via.');
+      } else if (inferredClass?.includes('Benzodiazepínico')) {
+        alerts.push('Portaria 344/98: Psicotrópico (Lista B1/B2). Exige Notificação de Receita Azul.');
       }
 
-      currentItem = {
+      const rawItem: PrescriptionItem = {
         id: `rx-item-${Date.now()}-${i}`,
         rawLine: line,
         medicationName: matchedMed ? matchedMed.name : extractedName || line,
         matchedMedicationId: matchedMed?.id,
-        activeIngredient: matchedMed?.activeIngredient || 'Verificar princípio ativo (DCB)',
+        activeIngredient: matchedMed?.activeIngredient || extractedName || 'Verificar princípio ativo (DCB)',
+        therapeuticClass: matchedMed?.therapeuticClass || inferredClass,
         concentration: concMatch ? concMatch[0] : matchedMed?.concentrations[0] || 'A conferir',
         pharmaceuticalForm: formMatch
           ? formMatch[0].charAt(0).toUpperCase() + formMatch[0].slice(1)
@@ -135,6 +149,7 @@ export function parsePrescriptionText(rawText: string): PrescriptionItem[] {
         alerts,
       };
 
+      currentItem = enrichItemWithClinicalSafety(rawItem);
       items.push(currentItem);
     }
   }
